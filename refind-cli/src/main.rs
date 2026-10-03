@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use refind_core::{EspManager, KernelManager, MokManager, SbctlManager, SystemInfo, DistroDetector, Distro, RefindConfig, TransactionManager};
+use refind_core::{EspManager, KernelManager, MokManager, RefindConfig, SbctlManager, SystemInfo};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -436,7 +436,7 @@ async fn cmd_entry(command: EntryCommands) -> anyhow::Result<()> {
 }
 
 async fn cmd_kernel(command: KernelCommands) -> anyhow::Result<()> {
-    let mut manager = KernelManager::new();
+    let manager = KernelManager::new();
 
     match command {
         KernelCommands::List => {
@@ -468,7 +468,7 @@ async fn cmd_kernel(command: KernelCommands) -> anyhow::Result<()> {
             let kernels = manager.scan().await?;
             println!("Found {} kernel(s)", kernels.len());
         }
-        KernelCommands::GenerateEntries { esp } => {
+        KernelCommands::GenerateEntries { esp: _ } => {
             println!("Generating rEFInd entries from kernels...");
         }
     }
@@ -559,7 +559,7 @@ async fn cmd_secure_boot(command: SecureBootCommands) -> anyhow::Result<()> {
             manager.delete_key(&key, &pass).await?;
             println!("Key removed successfully");
         }
-        SecureBootCommands::GenerateKey { name, output, algorithm } => {
+        SecureBootCommands::GenerateKey { name, output, algorithm: _ } => {
             let manager = MokManager::new();
             let (key_path, der_path) = manager.generate_mok_key(&output, &name).await?;
             println!("Generated key pair:");
@@ -605,7 +605,7 @@ async fn cmd_secure_boot(command: SecureBootCommands) -> anyhow::Result<()> {
 }
 
 async fn cmd_install(
-    esp: Option<String>,
+    _esp: Option<String>,
     arch: String,
     source: Option<PathBuf>,
     drivers: Vec<String>,
@@ -619,9 +619,9 @@ async fn cmd_install(
 }
 
 async fn cmd_backup(
-    output: Option<PathBuf>,
-    config_only: bool,
-    esp_only: bool,
+    _output: Option<PathBuf>,
+    _config_only: bool,
+    _esp_only: bool,
 ) -> anyhow::Result<()> {
     println!("Creating backup...");
     Ok(())
@@ -629,8 +629,8 @@ async fn cmd_backup(
 
 async fn cmd_restore(
     backup: PathBuf,
-    config_only: bool,
-    esp_only: bool,
+    _config_only: bool,
+    _esp_only: bool,
 ) -> anyhow::Result<()> {
     println!("Restoring from {}", backup.display());
     Ok(())

@@ -1,0 +1,9 @@
+[package]
+name = "refind-gui"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "GUI layer for rEFInd management"
+
+[dependencies]
+refind-core = { path = "../refind-core" }
