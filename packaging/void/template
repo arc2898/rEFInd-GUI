@@ -1,0 +1,24 @@
+# Void Linux packaging template for xbps-src
+# This is a design template and should be adapted to the project’s final
+# release process once a stable upstream source tarball is published.
+
+pkgname=refind-gui
+version=0.1.0
+revision=1
+build_style=cargo
+homepage=https://github.com/rEFInd-GUI/rEFInd-GUI
+license="MIT Apache-2.0"
+maintainer="rEFInd-GUI maintainers"
+short_desc="rEFInd management utility and boot environment tooling"
+
+# Example package body outline for xbps-src:
+#
+# do_build() {
+#   cargo build --release --locked --bin refind-cli
+# }
+#
+# do_install() {
+#   install -Dm755 target/release/refind-cli ${DESTDIR}/usr/bin/refind-cli
+#   install -Dm644 README.md ${DESTDIR}/usr/share/doc/refind-gui/README.md
+# }
+

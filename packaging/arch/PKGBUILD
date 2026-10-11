@@ -1,0 +1,31 @@
+# Maintainer: rEFInd-GUI maintainers
+# This package template is intended for Arch Linux packaging.
+
+pkgname=refind-gui
+_pkgname=refind-cli
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="rEFInd management utility and boot environment tooling"
+arch=("x86_64")
+url="https://github.com/rEFInd-GUI/rEFInd-GUI"
+license=('MIT' 'Apache')
+depends=('glibc')
+makedepends=('cargo' 'git' 'rust' 'pkgconf')
+source=("git+${url}.git")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "${srcdir}/rEFInd-GUI"
+  cargo fetch --locked
+}
+
+build() {
+  cd "${srcdir}/rEFInd-GUI"
+  cargo build --release --locked --bin refind-cli
+}
+
+package() {
+  cd "${srcdir}/rEFInd-GUI"
+  install -Dm755 "target/release/refind-cli" "${pkgdir}/usr/bin/refind-cli"
+  install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+}

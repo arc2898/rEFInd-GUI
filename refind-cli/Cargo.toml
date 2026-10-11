@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "rEFInd CLI - Command line interface for rEFInd management"
+documentation = "https://github.com/rEFInd-GUI/rEFInd-GUI/blob/main/README.md"
+homepage = "https://github.com/rEFInd-GUI/rEFInd-GUI"
+repository = "https://github.com/rEFInd-GUI/rEFInd-GUI"
 
 [dependencies]
 refind-core = { path = "../refind-core" }

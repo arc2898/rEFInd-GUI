@@ -111,31 +111,42 @@ pub struct SystemInfo {
 
 impl SystemInfo {
     pub async fn collect() -> anyhow::Result<Self> {
-        let uname = std::process::Command::new("uname")
-            .arg("-srm")
-            .output()
-            .ok();
+        let os = std::env::consts::OS;
+        let uname = if os == "linux" {
+            std::process::Command::new("uname")
+                .arg("-srm")
+                .output()
+                .ok()
+        } else {
+            None
+        };
 
         let kernel_info = uname
             .as_ref()
             .and_then(|output| String::from_utf8(output.stdout.clone()).ok())
             .map(|v| v.trim().to_owned())
-            .unwrap_or_else(|| "Linux x86_64 6.8.0".to_owned());
+            .unwrap_or_else(|| match os {
+                "windows" => format!("Windows {}", std::env::consts::ARCH),
+                _ => format!("Linux {} 6.8.0", std::env::consts::ARCH),
+            });
 
         let parts: Vec<&str> = kernel_info.split_whitespace().collect();
         let kernel_release = parts.get(1).copied().unwrap_or("6.8.0").to_owned();
-        let architecture = parts.get(2).copied().unwrap_or("x86_64").to_owned();
-        let os_release = read_os_release();
+        let architecture = parts.get(2).copied().unwrap_or(std::env::consts::ARCH).to_owned();
+        let os_release = if os == "linux" { read_os_release() } else { None };
         let distro_name = os_release
             .as_ref()
             .and_then(|release| release.pretty_name.clone())
             .or_else(|| os_release.as_ref().map(|release| release.name.clone()))
-            .unwrap_or_else(|| "Linux".to_owned());
+            .unwrap_or_else(|| match os {
+                "windows" => "Windows".to_owned(),
+                _ => "Linux".to_owned(),
+            });
         let distro_version = os_release.as_ref().and_then(|release| release.version.clone());
         let distro_id = os_release.as_ref().and_then(|release| release.id.clone());
         let cpu = read_cpu_info();
         let memory = read_memory_info();
-        let refind_path = detect_refind_path();
+        let refind_path = if os == "linux" { detect_refind_path() } else { None };
 
         Ok(Self {
             hostname: hostname::get()
@@ -143,13 +154,20 @@ impl SystemInfo {
                 .and_then(|value| value.into_string().ok())
                 .unwrap_or_else(|| "localhost".to_owned()),
             kernel_release: kernel_release.clone(),
-            kernel_version: format!("Linux kernel {}", kernel_release),
+            kernel_version: if os == "windows" {
+                format!("Windows kernel {}", kernel_release)
+            } else {
+                format!("Linux kernel {}", kernel_release)
+            },
             architecture,
-            boot_mode: detect_efi_mode(),
+            boot_mode: detect_efi_mode_for_platform(os),
             secure_boot: false,
             distro: Some(distro_name),
-            distro_version: Some(distro_version.clone().unwrap_or_else(|| "Unknown".to_owned())),
-            distro_id: Some(distro_id.clone().unwrap_or_else(|| "linux".to_owned())),
+            distro_version: Some(distro_version.clone().unwrap_or_else(|| match os {
+                "windows" => "Unknown".to_owned(),
+                _ => "Unknown".to_owned(),
+            })),
+            distro_id: Some(distro_id.clone().unwrap_or_else(|| os.to_owned())),
             cpu,
             memory,
             refind_installed: refind_path.is_some(),
@@ -364,6 +382,10 @@ impl DistroDetector {
 }
 
 fn read_boot_dir_for_kernels() -> Vec<PathBuf> {
+    if std::env::consts::OS != "linux" {
+        return Vec::new();
+    }
+
     let mut candidates = Vec::new();
     if let Ok(entries) = std::fs::read_dir("/boot") {
         for entry in entries.flatten() {
@@ -535,7 +557,11 @@ fn parse_kib_value(line: &str) -> u64 {
     value
 }
 
-fn detect_efi_mode() -> BootMode {
+fn detect_efi_mode_for_platform(os: &str) -> BootMode {
+    if os != "linux" {
+        return BootMode::Unknown;
+    }
+
     if std::path::Path::new("/sys/firmware/efi").exists() {
         BootMode::Uefi
     } else {
@@ -544,6 +570,10 @@ fn detect_efi_mode() -> BootMode {
 }
 
 fn detect_refind_path() -> Option<PathBuf> {
+    if std::env::consts::OS != "linux" {
+        return None;
+    }
+
     for candidate in [
         PathBuf::from("/boot/efi/EFI/refind"),
         PathBuf::from("/efi/EFI/refind"),
@@ -814,5 +844,10 @@ mod tests {
         assert_eq!(esps.len(), 1);
         assert_eq!(esps[0].device, "/dev/nvme0n1p1");
         assert!(esps[0].is_system_esp);
+    }
+
+    #[test]
+    fn non_linux_platforms_report_unknown_boot_mode() {
+        assert_eq!(detect_efi_mode_for_platform("windows"), BootMode::Unknown);
     }
 }

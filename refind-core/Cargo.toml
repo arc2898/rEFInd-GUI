@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Core logic and data models for the rEFInd management toolchain"
+documentation = "https://github.com/rEFInd-GUI/rEFInd-GUI/blob/main/README.md"
+homepage = "https://github.com/rEFInd-GUI/rEFInd-GUI"
+repository = "https://github.com/rEFInd-GUI/rEFInd-GUI"
 
 [dependencies]
 anyhow = { workspace = true }
