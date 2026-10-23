@@ -12,7 +12,7 @@ rEFInd-GUI is a Rust workspace for managing rEFInd boot entries, system configur
 ### Current status
 - Linux ESP discovery uses lsblk and reports command errors instead of treating them as an empty scan
 - config show displays the selected file as written; --config <path> selects a file explicitly
-- config validate parses timeout, default selection, and showtools settings, and reports malformed or unsafe timeout values
+- config validate parses timeout, default selection, and showtools, then checks timeout syntax and range
 - Validation is partial: it does not interpret every rEFInd directive or prove that a boot entry will work
 - Configuration commands do not modify the file
 
