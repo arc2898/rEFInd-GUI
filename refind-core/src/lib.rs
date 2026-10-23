@@ -193,6 +193,8 @@ fn scan_lsblk_esp(output: &str) -> anyhow::Result<Vec<EspInfo>> {
         let size = device.get("size").and_then(|s| s.as_str()).unwrap_or("0");
         let fstype = device.get("fstype").and_then(|f| f.as_str()).unwrap_or_default();
         let uuid = device.get("uuid").and_then(|u| u.as_str()).unwrap_or_default();
+        let part_uuid = device.get("partuuid").and_then(|u| u.as_str()).unwrap_or_default();
+        let part_type = device.get("parttype").and_then(|t| t.as_str()).unwrap_or_default();
         let label = device.get("label").and_then(|l| l.as_str()).unwrap_or_default();
         let mountpoints = device
             .get("mountpoints")
@@ -207,10 +209,19 @@ fn scan_lsblk_esp(output: &str) -> anyhow::Result<Vec<EspInfo>> {
             })
             .unwrap_or_default();
 
-        let is_esp = matches!(fstype.to_ascii_lowercase().as_str(), "vfat" | "fat32" | "fat16" | "exfat")
-            || mountpoints.iter().any(|m| m.contains("/boot/efi") || m.contains("EFI"));
+        let has_esp_partition_type = part_type.eq_ignore_ascii_case(
+            "c12a7328-f81f-11d2-ba4b-00a0c93ec93b",
+        );
+        let is_fat_filesystem = matches!(
+            fstype.to_ascii_lowercase().as_str(),
+            "vfat" | "fat32" | "fat16"
+        );
+        let has_esp_mount_point = mountpoints
+            .iter()
+            .any(|mount| matches!(mount.as_str(), "/boot/efi" | "/efi" | "/boot"));
+        let is_esp = has_esp_partition_type || (is_fat_filesystem && has_esp_mount_point);
 
-        if kind != "part" && !is_esp {
+        if kind != "part" || !is_esp {
             continue;
         }
 
@@ -222,14 +233,16 @@ fn scan_lsblk_esp(output: &str) -> anyhow::Result<Vec<EspInfo>> {
 
         esps.push(EspInfo {
             device: if name.starts_with("/dev/") { name.to_string() } else { format!("/dev/{}", name) },
-            partition_number: name.rsplit('p').next_back().and_then(|n| n.parse::<u32>().ok()).unwrap_or(0),
+            partition_number: parse_partition_number(name),
             size_bytes: parse_size_to_bytes(size),
             free_bytes: 0,
             filesystem: fstype.to_string(),
             label: if label.is_empty() { None } else { Some(label.to_string()) },
             uuid: uuid.to_string(),
-            part_uuid: uuid.to_string(),
-            is_system_esp: mount_point.as_ref().is_some_and(|mp| mp.to_string_lossy().contains("/boot/efi")),
+            part_uuid: part_uuid.to_string(),
+            is_system_esp: mount_point.as_ref().is_some_and(|mp| {
+                matches!(mp.to_string_lossy().as_ref(), "/boot/efi" | "/efi" | "/boot")
+            }),
             has_refind: mount_point.as_ref().is_some_and(|mp| mp.join("EFI/refind").exists()),
             refind_path: mount_point.as_ref().map(|mp| mp.join("EFI/refind")),
             mount_point,
@@ -238,6 +251,17 @@ fn scan_lsblk_esp(output: &str) -> anyhow::Result<Vec<EspInfo>> {
     }
 
     Ok(esps)
+}
+
+fn parse_partition_number(device_name: &str) -> u32 {
+    let digits_start = device_name
+        .char_indices()
+        .rev()
+        .find(|(_, character)| !character.is_ascii_digit())
+        .map(|(index, character)| index + character.len_utf8())
+        .unwrap_or(0);
+
+    device_name[digits_start..].parse().unwrap_or(0)
 }
 
 fn parse_size_to_bytes(value: &str) -> u64 {
@@ -588,34 +612,128 @@ fn detect_refind_path() -> Option<PathBuf> {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RefindConfig {
-    pub timeout: u32,
+    pub timeout: i32,
     pub default_selection: String,
     pub extra_entries: Vec<String>,
-    pub show_tools: bool,
+    pub show_tools: Vec<String>,
+    #[serde(skip)]
+    pub source_text: Option<String>,
+    #[serde(skip)]
+    pub parse_warnings: Vec<String>,
 }
 
 impl RefindConfig {
     pub fn load(path: &Path) -> anyhow::Result<Self> {
-        let _ = path;
-        Ok(Self::default())
+        let source = std::fs::read_to_string(path)
+            .map_err(|error| anyhow::anyhow!("could not read {}: {}", path.display(), error))?;
+        let mut config = Self {
+            source_text: Some(source.clone()),
+            ..Self::default()
+        };
+
+        for (index, raw_line) in source.lines().enumerate() {
+            let line = strip_refind_comment(raw_line).trim();
+            if line.is_empty() || line == "}" || line.ends_with('{') {
+                continue;
+            }
+
+            let Some((directive, value)) = line.split_once(char::is_whitespace) else {
+                config.parse_warnings.push(format!(
+                    "Line {}: directive {} has no value",
+                    index + 1,
+                    line
+                ));
+                continue;
+            };
+            let value = value.trim();
+            if value.is_empty() {
+                config.parse_warnings.push(format!(
+                    "Line {}: directive {} has no value",
+                    index + 1,
+                    directive
+                ));
+                continue;
+            }
+
+            match directive.to_ascii_lowercase().as_str() {
+                "timeout" => match value.parse::<i32>() {
+                    Ok(timeout) => config.timeout = timeout,
+                    Err(_) => config.parse_warnings.push(format!(
+                        "Line {}: {} is not a valid timeout integer",
+                        index + 1,
+                        value
+                    )),
+                },
+                "default_selection" => config.default_selection = value.to_owned(),
+                "showtools" => {
+                    config.show_tools = value
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|tool| !tool.is_empty())
+                        .map(str::to_owned)
+                        .collect();
+                }
+                _ => {}
+            }
+        }
+
+        Ok(config)
     }
 
     pub fn validate(&self) -> anyhow::Result<Vec<String>> {
-        let mut warnings = Vec::new();
-        if self.timeout == 0 {
-            warnings.push("Timeout is zero; boot menu may not appear".to_owned());
+        let mut warnings = self.parse_warnings.clone();
+        if self.timeout < -1 {
+            warnings.push(format!(
+                "Timeout {} is below -1; rEFInd accepts -1 or a non-negative number of seconds",
+                self.timeout
+            ));
+        } else if self.timeout == -1 {
+            warnings.push(
+                "Timeout -1 immediately boots the default selection unless a key is pressed".to_owned(),
+            );
         }
         Ok(warnings)
     }
 }
 
+fn strip_refind_comment(line: &str) -> &str {
+    let mut in_quotes = false;
+    let mut escaped = false;
+
+    for (index, character) in line.char_indices() {
+        if in_quotes {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                in_quotes = false;
+            }
+        } else if character == '"' {
+            in_quotes = true;
+        } else if character == '#' {
+            return &line[..index];
+        }
+    }
+
+    line
+}
+
 impl std::fmt::Display for RefindConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(source) = &self.source_text {
+            return f.write_str(source);
+        }
+
         writeln!(f, "timeout {}", self.timeout)?;
-        writeln!(f, "default_selection {}", self.default_selection)?;
-        writeln!(f, "showtools {}", self.show_tools)?;
+        if !self.default_selection.is_empty() {
+            writeln!(f, "default_selection {}", self.default_selection)?;
+        }
+        if !self.show_tools.is_empty() {
+            writeln!(f, "showtools {}", self.show_tools.join(", "))?;
+        }
         for entry in &self.extra_entries {
-            writeln!(f, "load {}", entry)?;
+            writeln!(f, "{}", entry)?;
         }
         Ok(())
     }
@@ -630,17 +748,28 @@ impl EspManager {
     }
 
     pub async fn scan(&self) -> anyhow::Result<Vec<EspInfo>> {
-        let output = std::process::Command::new("lsblk")
-            .args(["-J", "-o", "NAME,TYPE,SIZE,FSTYPE,UUID,LABEL,MOUNTPOINTS"])
-            .output();
-
-        match output {
-            Ok(result) if result.status.success() => {
-                let stdout = String::from_utf8_lossy(&result.stdout).to_string();
-                scan_lsblk_esp(&stdout)
-            }
-            _ => Ok(Vec::new()),
+        if std::env::consts::OS != "linux" {
+            anyhow::bail!("ESP discovery is currently supported on Linux only");
         }
+
+        let result = std::process::Command::new("lsblk")
+            .args([
+                "--bytes",
+                "--json",
+                "--output",
+                "NAME,TYPE,SIZE,FSTYPE,UUID,PARTUUID,PARTTYPE,LABEL,MOUNTPOINTS",
+            ])
+            .output()
+            .map_err(|error| anyhow::anyhow!("could not run lsblk: {}", error))?;
+
+        if !result.status.success() {
+            anyhow::bail!(
+                "lsblk failed: {}",
+                String::from_utf8_lossy(&result.stderr).trim()
+            );
+        }
+
+        scan_lsblk_esp(&String::from_utf8_lossy(&result.stdout))
     }
 
     pub async fn mount(&mut self, _esp: &EspInfo, _mount_point: &Path) -> anyhow::Result<()> {
@@ -851,3 +980,4 @@ mod tests {
         assert_eq!(detect_efi_mode_for_platform("windows"), BootMode::Unknown);
     }
 }
+
