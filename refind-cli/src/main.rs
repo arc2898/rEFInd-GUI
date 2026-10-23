@@ -275,7 +275,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Entry { command } => cmd_entry(command).await?,
         Commands::Kernel { command } => cmd_kernel(command).await?,
         Commands::Theme { command } => cmd_theme(command).await?,
-        Commands::Config { command } => cmd_config(command).await?,
+        Commands::Config { command } => cmd_config(command, cli.config).await?,
         Commands::SecureBoot { command } => cmd_secure_boot(command).await?,
         Commands::Install { esp, arch, source, drivers, no_boot_entry } => {
             cmd_install(esp, arch, source, drivers, no_boot_entry).await?
@@ -343,11 +343,13 @@ async fn cmd_esp(command: EspCommands) -> anyhow::Result<()> {
 
     match command {
         EspCommands::List => {
-            println!("=== ESP Partitions ===");
+            println!("=== EFI System Partitions ===");
+            if esps.is_empty() {
+                println!("No EFI System Partitions found.");
+            }
             for esp in &esps {
-                println!("  {}p{} - {:.1} MB free / {:.1} MB total {} {}",
+                println!("  {} (partition {}) - {:.1} MB total {} {}",
                     esp.device, esp.partition_number,
-                    esp.free_bytes as f64 / 1e6,
                     esp.size_bytes as f64 / 1e6,
                     if esp.is_system_esp { "[SYSTEM]" } else { "" },
                     if esp.has_refind { "[REFIND]" } else { "" }
@@ -359,7 +361,6 @@ async fn cmd_esp(command: EspCommands) -> anyhow::Result<()> {
                 println!("Device: {}", esp.device);
                 println!("Partition: {}", esp.partition_number);
                 println!("Size: {:.1} MB", esp.size_bytes as f64 / 1e6);
-                println!("Free: {:.1} MB", esp.free_bytes as f64 / 1e6);
                 println!("Filesystem: {}", esp.filesystem);
                 println!("Label: {}", esp.label.as_deref().unwrap_or("none"));
                 println!("UUID: {}", esp.uuid);
@@ -379,7 +380,7 @@ async fn cmd_esp(command: EspCommands) -> anyhow::Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("ESP not found"))?;
             let mp = mount_point.unwrap_or_else(|| PathBuf::from(format!("/mnt/esp_{}_{}", device.replace('/', "_"), partition)));
             manager.mount(esp, &mp).await?;
-            println!("Mounted {}p{} at {}", device, partition, mp.display());
+            println!("Mounted {} (partition {}) at {}", device, partition, mp.display());
         }
         EspCommands::Unmount { mount_point } => {
             manager.unmount(&mount_point).await?;
@@ -399,7 +400,7 @@ async fn cmd_entry(command: EntryCommands) -> anyhow::Result<()> {
             println!("=== Boot Entries ===");
             for esp in &esps {
                 if !esp.boot_entries.is_empty() {
-                    println!("\nESP: {}p{}", esp.device, esp.partition_number);
+                    println!("\nESP: {} (partition {})", esp.device, esp.partition_number);
                     for entry in &esp.boot_entries {
                         println!("  Boot{:04X}: {} -> {} {}",
                             entry.boot_num, entry.label, entry.path,
@@ -491,40 +492,64 @@ async fn cmd_theme(command: ThemeCommands) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn cmd_config(command: ConfigCommands) -> anyhow::Result<()> {
-    let paths = [
-        "/etc/refind.conf",
-        "/boot/efi/EFI/refind/refind.conf",
-        "/efi/EFI/refind/refind.conf",
-    ];
-
-    let config = paths.iter()
-        .find(|p| std::path::Path::new(p).exists())
-        .map(|p| RefindConfig::load(std::path::Path::new(p)))
-        .transpose()?
-        .unwrap_or_else(RefindConfig::default);
+async fn cmd_config(
+    command: ConfigCommands,
+    explicit_path: Option<PathBuf>,
+) -> anyhow::Result<()> {
+    let path = resolve_config_path(explicit_path)?;
+    let config = RefindConfig::load(&path)?;
 
     match command {
         ConfigCommands::Show => {
-            println!("{}", config.to_string());
+            print!("{}", config);
         }
         ConfigCommands::Validate => {
+            println!("Validating {}", path.display());
+            println!("Checks timeout, default_selection, and showtools; other directives are preserved.");
             let warnings = config.validate()?;
             if warnings.is_empty() {
-                println!("Config is valid");
+                println!("No issues found in the settings checked");
             } else {
                 println!("Warnings:");
-                for w in warnings {
-                    println!("  - {}", w);
+                for warning in warnings {
+                    println!("  - {}", warning);
                 }
             }
         }
         ConfigCommands::Edit => {
-            println!("Opening editor... (not implemented)");
+            anyhow::bail!(
+                "interactive editing is not implemented; edit {} with a text editor",
+                path.display()
+            );
         }
     }
 
     Ok(())
+}
+
+fn resolve_config_path(explicit_path: Option<PathBuf>) -> anyhow::Result<PathBuf> {
+    if let Some(path) = explicit_path {
+        if path.is_file() {
+            return Ok(path);
+        }
+        anyhow::bail!("rEFInd config file not found: {}", path.display());
+    }
+
+    let candidates = [
+        PathBuf::from("/etc/refind.conf"),
+        PathBuf::from("/boot/efi/EFI/refind/refind.conf"),
+        PathBuf::from("/efi/EFI/refind/refind.conf"),
+        PathBuf::from("/boot/EFI/refind/refind.conf"),
+    ];
+
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "could not find refind.conf in standard locations; pass --config <path>"
+            )
+        })
 }
 
 async fn cmd_secure_boot(command: SecureBootCommands) -> anyhow::Result<()> {
@@ -635,3 +660,4 @@ async fn cmd_restore(
     println!("Restoring from {}", backup.display());
     Ok(())
 }
+
